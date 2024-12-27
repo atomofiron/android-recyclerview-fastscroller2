@@ -19,6 +19,8 @@ class DemoActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_main)
 
+        //findViewById<View>(R.id.main).foreground = ScreenCornersDrawable(80f)
+
         val recyclerView = findViewById<RecyclerView>(R.id.recycler_view)
         recyclerView.adapter = ConcatAdapter(LabelAdapter(), ItemAdapter(), LabelAdapter())
         FastScroller2(
