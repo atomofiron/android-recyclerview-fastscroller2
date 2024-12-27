@@ -36,7 +36,7 @@ class FastScroller2(
     minAreaSize: Int = defaultWidth,
     private val minThumbLength: Int = 0,
     private val inTheEnd: Boolean = true,
-    private val requestRedraw: () -> Unit = { },
+    private val callback: ((Action) -> Unit)? = null,
 ) : ItemDecoration(), OnItemTouchListener {
     companion object {
         // Scroll thumb not showing
@@ -63,6 +63,10 @@ class FastScroller2(
 
         private val PRESSED_STATE_SET = intArrayOf(android.R.attr.state_pressed)
         private val EMPTY_STATE_SET = intArrayOf()
+    }
+
+    enum class Action {
+        Redraw, DragStart
     }
 
     @IntDef(STATE_HIDDEN, STATE_VISIBLE, STATE_DRAGGING)
@@ -186,13 +190,14 @@ class FastScroller2(
 
     fun requestRedraw() {
         mRecyclerView.invalidate()
-        requestRedraw.invoke()
+        callback?.invoke(Action.Redraw)
     }
 
     fun setState(@State state: Int) {
         if (state == STATE_DRAGGING && mState != STATE_DRAGGING) {
             mVerticalThumbDrawable.setState(PRESSED_STATE_SET)
             cancelHide()
+            callback?.invoke(Action.DragStart)
         }
         if (state != mState) {
             requestRedraw()
@@ -421,7 +426,6 @@ class FastScroller2(
         } else if (me.action == MotionEvent.ACTION_UP && mState == STATE_DRAGGING) {
             setState(STATE_VISIBLE)
             mDragState = DRAG_NONE
-            requestRedraw()
         } else if (me.action == MotionEvent.ACTION_MOVE && mState == STATE_DRAGGING) {
             show()
             when (mDragState) {
