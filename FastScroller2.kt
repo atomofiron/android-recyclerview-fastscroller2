@@ -292,19 +292,22 @@ class FastScroller2(
     private fun drawVerticalScrollbar(canvas: Canvas) {
         val viewWidth = mRecyclerViewWidth
 
-        val left = viewWidth - mVerticalThumbWidth.toFloat()
         val top = mVerticalThumbCenterY - mVerticalThumbHeight / 2f
         mVerticalThumbDrawable.setBounds(0, 0, mVerticalThumbWidth, mVerticalThumbHeight)
         mVerticalTrackDrawable.setBounds(0, paddingTop, mVerticalTrackWidth, paddingTop + getVerticalTrackArea())
 
         if (onTheLeft) {
+            canvas.translate(paddingLeft.toFloat(), 0f)
             mVerticalTrackDrawable.draw(canvas)
-            canvas.translate(mVerticalThumbWidth.toFloat(), top)
+            val left = mVerticalThumbWidth.toFloat()
+            canvas.translate(left, top)
             canvas.scale(-1f, 1f)
             mVerticalThumbDrawable.draw(canvas)
             canvas.scale(-1f, 1f)
-            canvas.translate(-mVerticalThumbWidth.toFloat(), -top)
+            canvas.translate(-left, -top)
+            canvas.translate(-paddingLeft.toFloat(), 0f)
         } else {
+            val left = viewWidth - mVerticalThumbWidth - paddingRight.toFloat()
             canvas.translate(left, 0f)
             mVerticalTrackDrawable.draw(canvas)
             canvas.translate(0f, top)
@@ -313,8 +316,8 @@ class FastScroller2(
         }
         if (isShowingLayoutBounds) {
             when {
-                onTheLeft -> canvas.translate(0f, top)
-                else -> canvas.translate(viewWidth - verticalThumbArea.toFloat(), top)
+                onTheLeft -> canvas.translate(paddingLeft.toFloat(), top)
+                else -> canvas.translate(viewWidth - verticalThumbArea - paddingRight.toFloat(), top)
             }
             canvas.drawRect(0f, 0f, verticalThumbArea.toFloat(), mVerticalThumbHeight.toFloat(), debugPaint)
         }
@@ -497,8 +500,8 @@ class FastScroller2(
     @VisibleForTesting
     fun isPointInsideVerticalThumb(x: Float, y: Float): Boolean {
         return when {
-            onTheLeft -> x <= verticalThumbArea
-            else -> x >= mRecyclerViewWidth - verticalThumbArea
+            onTheLeft -> x >= paddingLeft && x <= verticalThumbArea + paddingLeft
+            else -> x >= mRecyclerViewWidth - verticalThumbArea - paddingRight && x <= mRecyclerViewWidth - paddingRight
         } && y >= mVerticalThumbCenterY - mVerticalThumbHeight / 2 && y <= mVerticalThumbCenterY + mVerticalThumbHeight / 2
     }
 
