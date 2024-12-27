@@ -5,8 +5,12 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.animation.ValueAnimator.AnimatorUpdateListener
 import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.StateListDrawable
+import android.os.Build.VERSION.SDK_INT
+import android.os.Build.VERSION_CODES.R
 import android.view.MotionEvent
 import android.view.View
 import androidx.annotation.IntDef
@@ -21,16 +25,18 @@ import kotlin.math.min
 /**
  * Class responsible to animate and provide a fast scroller.
  */
-@VisibleForTesting
-class FastScroller(
+class FastScroller2(
     recyclerView: RecyclerView,
     @get:VisibleForTesting val mVerticalThumbDrawable: StateListDrawable,
     @get:VisibleForTesting val mVerticalTrackDrawable: Drawable,
     private val mHorizontalThumbDrawable: StateListDrawable,
     private val mHorizontalTrackDrawable: Drawable,
-    defaultWidth: Int,
+    defaultWidth: Int = 0,
     private val mScrollbarMinimumRange: Int,
-    private val mMargin: Int
+    minAreaSize: Int = defaultWidth,
+    private val minThumbLength: Int = 0,
+    private val inTheEnd: Boolean = true,
+    private val requestRedraw: () -> Unit = { },
 ) : ItemDecoration(), OnItemTouchListener {
     companion object {
         // Scroll thumb not showing
@@ -71,11 +77,14 @@ class FastScroller(
     @Retention(AnnotationRetention.SOURCE)
     private annotation class AnimationState
 
-    private val mVerticalThumbWidth = max(defaultWidth, mVerticalThumbDrawable.intrinsicWidth)
-    private val mVerticalTrackWidth = max(defaultWidth, mVerticalTrackDrawable.intrinsicWidth)
+    private val mVerticalThumbWidth: Int = max(defaultWidth, mVerticalThumbDrawable.intrinsicWidth)
+    private val mVerticalTrackWidth: Int = max(defaultWidth, mVerticalTrackDrawable.intrinsicWidth)
 
-    private val mHorizontalThumbHeight = max(defaultWidth, mHorizontalThumbDrawable.intrinsicWidth)
-    private val mHorizontalTrackHeight = max(defaultWidth, mHorizontalTrackDrawable.intrinsicWidth)
+    private val mHorizontalThumbHeight: Int = max(defaultWidth, mHorizontalThumbDrawable.intrinsicWidth)
+    private val mHorizontalTrackHeight: Int = max(defaultWidth, mHorizontalTrackDrawable.intrinsicWidth)
+
+    private val verticalThumbArea = max(minAreaSize, mVerticalThumbWidth)
+    private val horizontalThumbArea = max(minAreaSize, mHorizontalThumbHeight)
 
     // Dynamic values for the vertical scroll bar
     @VisibleForTesting
@@ -83,7 +92,9 @@ class FastScroller(
     @VisibleForTesting
     var mVerticalThumbCenterY = 0
     @VisibleForTesting
-    var mVerticalDragY = 0f
+    var mVerticalDownY = 0f
+    @VisibleForTesting
+    var mVerticalDownOffset = 0
 
     // Dynamic values for the horizontal scroll bar
     @VisibleForTesting
@@ -91,12 +102,19 @@ class FastScroller(
     @VisibleForTesting
     var mHorizontalThumbCenterX = 0
     @VisibleForTesting
-    var mHorizontalDragX = 0f
+    var mHorizontalDownX = 0f
+    @VisibleForTesting
+    var mHorizontalDownOffset = 0
 
     private var mRecyclerViewWidth = 0
     private var mRecyclerViewHeight = 0
 
-    private var mRecyclerView: RecyclerView? = null
+    private var mRecyclerView: RecyclerView = recyclerView
+
+    private val paddingTop get() = mRecyclerView.paddingTop
+    private val paddingBottom get() = mRecyclerView.paddingBottom
+    private val paddingLeft get() = mRecyclerView.paddingLeft
+    private val paddingRight get() = mRecyclerView.paddingRight
 
     /**
      * Whether the document is long/wide enough to require scrolling. If not, we don't show the
@@ -111,16 +129,24 @@ class FastScroller(
     @DragState
     private var mDragState = DRAG_NONE
 
-    private val mVerticalRange = IntArray(2)
-    private val mHorizontalRange = IntArray(2)
     private val mShowHideAnimator = ValueAnimator.ofFloat(0f, 1f)
 
     @AnimationState
-    private var mAnimationState = ANIMATION_STATE_OUT
-    private val mHideRunnable = Runnable { hide(HIDE_DURATION_MS) }
-    private val mOnScrollListener = object : RecyclerView.OnScrollListener() {
+    private var mAnimationState: Int = ANIMATION_STATE_OUT
+    private val mHideRunnable: Runnable = Runnable { hide(HIDE_DURATION_MS) }
+    private val mOnScrollListener: RecyclerView.OnScrollListener = object : RecyclerView.OnScrollListener() {
         override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
             updateScrollPosition(recyclerView.computeHorizontalScrollOffset(), recyclerView.computeVerticalScrollOffset())
+        }
+    }
+
+    private val onTheLeft get() = (mRecyclerView.layoutDirection == View.LAYOUT_DIRECTION_RTL) == inTheEnd
+    private var isShowingLayoutBounds = false
+    private val debugPaint by lazy(LazyThreadSafetyMode.NONE) {
+        Paint().apply {
+            style = Paint.Style.STROKE
+            color = Color.RED
+            strokeWidth = 1f
         }
     }
 
@@ -131,37 +157,34 @@ class FastScroller(
         mShowHideAnimator.addListener(AnimatorListener())
         mShowHideAnimator.addUpdateListener(AnimatorUpdater())
 
-        attachToRecyclerView(recyclerView)
+        setupCallbacks()
     }
 
-    fun attachToRecyclerView(recyclerView: RecyclerView?) {
+    fun attachToRecyclerView(recyclerView: RecyclerView) {
         if (mRecyclerView === recyclerView) {
-            return  // nothing to do
+            return
         }
-        if (mRecyclerView != null) {
-            destroyCallbacks()
-        }
+        destroyCallbacks()
         mRecyclerView = recyclerView
-        if (mRecyclerView != null) {
-            setupCallbacks()
-        }
+        setupCallbacks()
     }
 
     private fun setupCallbacks() {
-        mRecyclerView!!.addItemDecoration(this)
-        mRecyclerView!!.addOnItemTouchListener(this)
-        mRecyclerView!!.addOnScrollListener(mOnScrollListener)
+        mRecyclerView.addItemDecoration(this)
+        mRecyclerView.addOnItemTouchListener(this)
+        mRecyclerView.addOnScrollListener(mOnScrollListener)
     }
 
     private fun destroyCallbacks() {
-        mRecyclerView!!.removeItemDecoration(this)
-        mRecyclerView!!.removeOnItemTouchListener(this)
-        mRecyclerView!!.removeOnScrollListener(mOnScrollListener)
+        mRecyclerView.removeItemDecoration(this)
+        mRecyclerView.removeOnItemTouchListener(this)
+        mRecyclerView.removeOnScrollListener(mOnScrollListener)
         cancelHide()
     }
 
     fun requestRedraw() {
-        mRecyclerView!!.invalidate()
+        mRecyclerView.invalidate()
+        requestRedraw.invoke()
     }
 
     fun setState(@State state: Int) {
@@ -169,10 +192,12 @@ class FastScroller(
             mVerticalThumbDrawable.setState(PRESSED_STATE_SET)
             cancelHide()
         }
+
         when (state) {
             STATE_HIDDEN -> requestRedraw()
             else -> show()
         }
+
         if (mState == STATE_DRAGGING && state != STATE_DRAGGING) {
             mVerticalThumbDrawable.setState(EMPTY_STATE_SET)
             resetHideDelay(HIDE_DELAY_AFTER_DRAGGING_MS)
@@ -181,8 +206,6 @@ class FastScroller(
         }
         mState = state
     }
-
-    private fun isLayoutRTL() = mRecyclerView!!.layoutDirection == View.LAYOUT_DIRECTION_RTL
 
     fun isDragging() = mState == STATE_DRAGGING
 
@@ -207,6 +230,7 @@ class FastScroller(
                 mShowHideAnimator.start()
             }
         }
+        isShowingLayoutBounds = if (SDK_INT >= R) mRecyclerView.isShowingLayoutBounds else false
     }
 
     @VisibleForTesting
@@ -229,18 +253,18 @@ class FastScroller(
     }
 
     private fun cancelHide() {
-        mRecyclerView!!.removeCallbacks(mHideRunnable)
+        mRecyclerView.removeCallbacks(mHideRunnable)
     }
 
     private fun resetHideDelay(delay: Int) {
         cancelHide()
-        mRecyclerView!!.postDelayed(mHideRunnable, delay.toLong())
+        mRecyclerView.postDelayed(mHideRunnable, delay.toLong())
     }
 
     override fun onDrawOver(canvas: Canvas, parent: RecyclerView, state: RecyclerView.State) {
-        if (mRecyclerViewWidth != mRecyclerView!!.width || mRecyclerViewHeight != mRecyclerView!!.height) {
-            mRecyclerViewWidth = mRecyclerView!!.width
-            mRecyclerViewHeight = mRecyclerView!!.height
+        if (mRecyclerViewWidth != mRecyclerView.width || mRecyclerViewHeight != mRecyclerView.height) {
+            mRecyclerViewWidth = mRecyclerView.width
+            mRecyclerViewHeight = mRecyclerView.height
             // This is due to the different events ordering when keyboard is opened or
             // retracted vs rotate. Hence to avoid corner cases we just disable the
             // scroller when size changed, and wait until the scroll position is recomputed
@@ -261,12 +285,12 @@ class FastScroller(
     private fun drawVerticalScrollbar(canvas: Canvas) {
         val viewWidth = mRecyclerViewWidth
 
-        val left = viewWidth - mVerticalThumbWidth
+        val left = viewWidth - mVerticalThumbWidth.toFloat()
         val top = mVerticalThumbCenterY - mVerticalThumbHeight / 2f
         mVerticalThumbDrawable.setBounds(0, 0, mVerticalThumbWidth, mVerticalThumbHeight)
-        mVerticalTrackDrawable.setBounds(0, 0, mVerticalTrackWidth, mRecyclerViewHeight)
+        mVerticalTrackDrawable.setBounds(0, paddingTop, mVerticalTrackWidth, paddingTop + getVerticalTrackArea())
 
-        if (isLayoutRTL()) {
+        if (onTheLeft) {
             mVerticalTrackDrawable.draw(canvas)
             canvas.translate(mVerticalThumbWidth.toFloat(), top)
             canvas.scale(-1f, 1f)
@@ -274,11 +298,18 @@ class FastScroller(
             canvas.scale(-1f, 1f)
             canvas.translate(-mVerticalThumbWidth.toFloat(), -top)
         } else {
-            canvas.translate(left.toFloat(), 0f)
+            canvas.translate(left, 0f)
             mVerticalTrackDrawable.draw(canvas)
             canvas.translate(0f, top)
             mVerticalThumbDrawable.draw(canvas)
-            canvas.translate(-left.toFloat(), -top)
+            canvas.translate(-left, -top)
+        }
+        if (isShowingLayoutBounds) {
+            when {
+                onTheLeft -> canvas.translate(0f, top)
+                else -> canvas.translate(viewWidth - verticalThumbArea.toFloat(), top)
+            }
+            canvas.drawRect(0f, 0f, verticalThumbArea.toFloat(), mVerticalThumbHeight.toFloat(), debugPaint)
         }
     }
 
@@ -288,12 +319,16 @@ class FastScroller(
         val top = viewHeight - mHorizontalThumbHeight.toFloat()
         val left = mHorizontalThumbCenterX - mHorizontalThumbWidth / 2f
         mHorizontalThumbDrawable.setBounds(0, 0, mHorizontalThumbWidth, mHorizontalThumbHeight)
-        mHorizontalTrackDrawable.setBounds(0, 0, mRecyclerViewWidth, mHorizontalTrackHeight)
+        mHorizontalTrackDrawable.setBounds(paddingLeft, 0, paddingLeft + getHorizontalTrackArea(), mHorizontalTrackHeight)
 
         canvas.translate(0f, top)
         mHorizontalTrackDrawable.draw(canvas)
         canvas.translate(left, 0f)
         mHorizontalThumbDrawable.draw(canvas)
+        if (isShowingLayoutBounds) {
+            val height = mHorizontalThumbHeight.toFloat()
+            canvas.drawRect(0f, height - horizontalThumbArea, height, mHorizontalThumbWidth.toFloat(), debugPaint)
+        }
         canvas.translate(-left, -top)
     }
 
@@ -305,15 +340,13 @@ class FastScroller(
      * @param offsetY The new scroll Y offset.
      */
     fun updateScrollPosition(offsetX: Int, offsetY: Int) {
-        val verticalContentLength = mRecyclerView!!.computeVerticalScrollRange()
-        val verticalVisibleLength = mRecyclerViewHeight
-        mNeedVerticalScrollbar = verticalContentLength - verticalVisibleLength > 0
-                && mRecyclerViewHeight >= mScrollbarMinimumRange
+        val verticalContentLength = mRecyclerView.computeVerticalScrollRange()
+        val verticalVisibleLength = getVerticalTrackArea()
+        mNeedVerticalScrollbar = (verticalContentLength - verticalVisibleLength > 0) && (verticalVisibleLength >= mScrollbarMinimumRange)
 
-        val horizontalContentLength = mRecyclerView!!.computeHorizontalScrollRange()
-        val horizontalVisibleLength = mRecyclerViewWidth
-        mNeedHorizontalScrollbar = horizontalContentLength - horizontalVisibleLength > 0
-                && mRecyclerViewWidth >= mScrollbarMinimumRange
+        val horizontalContentLength = mRecyclerView.computeHorizontalScrollRange()
+        val horizontalVisibleLength = getHorizontalTrackArea()
+        mNeedHorizontalScrollbar = (horizontalContentLength - horizontalVisibleLength > 0) && (horizontalVisibleLength >= mScrollbarMinimumRange)
 
         if (!mNeedVerticalScrollbar && !mNeedHorizontalScrollbar) {
             if (mState != STATE_HIDDEN) {
@@ -322,21 +355,16 @@ class FastScroller(
             return
         }
         if (mNeedVerticalScrollbar) {
-            val middleScreenPos = offsetY + verticalVisibleLength / 2.0f
-            mVerticalThumbCenterY = ((verticalVisibleLength * middleScreenPos) / verticalContentLength).toInt()
-            mVerticalThumbHeight = min(
-                verticalVisibleLength,
-                ((verticalVisibleLength * verticalVisibleLength) / verticalContentLength)
-            )
+            mVerticalThumbHeight = min(verticalVisibleLength, ((verticalVisibleLength * verticalVisibleLength) / verticalContentLength))
+                .coerceAtLeast(minThumbLength)
+            mVerticalThumbCenterY = paddingTop + mVerticalThumbHeight / 2 +
+                    ((verticalVisibleLength - mVerticalThumbHeight) * offsetY / (verticalContentLength - verticalVisibleLength))
         }
         if (mNeedHorizontalScrollbar) {
-            val middleScreenPos = offsetX + horizontalVisibleLength / 2.0f
-            mHorizontalThumbCenterX =
-                ((horizontalVisibleLength * middleScreenPos) / horizontalContentLength).toInt()
-            mHorizontalThumbWidth = min(
-                horizontalVisibleLength,
-                ((horizontalVisibleLength * horizontalVisibleLength) / horizontalContentLength)
-            )
+            mHorizontalThumbWidth = min(horizontalVisibleLength, ((horizontalVisibleLength * horizontalVisibleLength) / horizontalContentLength))
+                .coerceAtLeast(minThumbLength)
+            mHorizontalThumbCenterX = paddingLeft + mHorizontalThumbWidth / 2 +
+                    ((horizontalVisibleLength * mHorizontalThumbWidth) * offsetX / (horizontalContentLength - horizontalVisibleLength))
         }
         if (mState == STATE_HIDDEN || mState == STATE_VISIBLE) {
             setState(STATE_VISIBLE)
@@ -344,29 +372,29 @@ class FastScroller(
     }
 
     override fun onInterceptTouchEvent(recyclerView: RecyclerView, ev: MotionEvent): Boolean {
-        val handled: Boolean
-        if (mState == STATE_VISIBLE) {
-            val insideVerticalThumb = isPointInsideVerticalThumb(ev.x, ev.y)
-            val insideHorizontalThumb = isPointInsideHorizontalThumb(ev.x, ev.y)
-            if (ev.action == MotionEvent.ACTION_DOWN && (insideVerticalThumb || insideHorizontalThumb)) {
-                if (insideHorizontalThumb) {
-                    mDragState = DRAG_X
-                    mHorizontalDragX = ev.x.toInt().toFloat()
-                } else if (insideVerticalThumb) {
-                    mDragState = DRAG_Y
-                    mVerticalDragY = ev.y.toInt().toFloat()
+        return when (mState) {
+            STATE_VISIBLE -> {
+                val insideVerticalThumb = isPointInsideVerticalThumb(ev.x, ev.y)
+                val insideHorizontalThumb = isPointInsideHorizontalThumb(ev.x, ev.y)
+                if (ev.action == MotionEvent.ACTION_DOWN && (insideVerticalThumb || insideHorizontalThumb)) {
+                    if (insideHorizontalThumb) {
+                        mDragState = DRAG_X
+                        mHorizontalDownX = ev.x
+                        mHorizontalDownOffset = mRecyclerView.computeHorizontalScrollOffset()
+                    } else if (insideVerticalThumb) {
+                        mDragState = DRAG_Y
+                        mVerticalDownY = ev.y
+                        mVerticalDownOffset = mRecyclerView.computeVerticalScrollOffset()
+                    }
+                    setState(STATE_DRAGGING)
+                    true
+                } else {
+                    false
                 }
-                setState(STATE_DRAGGING)
-                handled = true
-            } else {
-                handled = false
             }
-        } else if (mState == STATE_DRAGGING) {
-            handled = true
-        } else {
-            handled = false
+            STATE_DRAGGING -> true
+            else -> false
         }
-        return handled
     }
 
     override fun onTouchEvent(recyclerView: RecyclerView, me: MotionEvent) {
@@ -379,18 +407,19 @@ class FastScroller(
             if (insideVerticalThumb || insideHorizontalThumb) {
                 if (insideHorizontalThumb) {
                     mDragState = DRAG_X
-                    mHorizontalDragX = me.x
+                    mHorizontalDownX = me.x
+                    mHorizontalDownOffset = mRecyclerView.computeHorizontalScrollOffset()
                 } else if (insideVerticalThumb) {
                     mDragState = DRAG_Y
-                    mVerticalDragY = me.y
+                    mVerticalDownY = me.y
+                    mVerticalDownOffset = mRecyclerView.computeVerticalScrollOffset()
                 }
                 setState(STATE_DRAGGING)
             }
         } else if (me.action == MotionEvent.ACTION_UP && mState == STATE_DRAGGING) {
-            mVerticalDragY = 0f
-            mHorizontalDragX = 0f
             setState(STATE_VISIBLE)
             mDragState = DRAG_NONE
+            requestRedraw()
         } else if (me.action == MotionEvent.ACTION_MOVE && mState == STATE_DRAGGING) {
             show()
             if (mDragState == DRAG_X) {
@@ -405,95 +434,86 @@ class FastScroller(
     override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {}
 
     private fun verticalScrollTo(y: Float) {
-        val scrollbarRange = getVerticalRange()
-        val dragY = max(scrollbarRange[0].toFloat(), min(scrollbarRange[1].toFloat(), y))
-        if (abs(mVerticalThumbCenterY - dragY) < 2) {
+        if (abs(mVerticalThumbCenterY - y) < 2) {
             return
         }
         val scrollingBy = scrollTo(
-            mVerticalDragY, dragY, scrollbarRange,
-            mRecyclerView!!.computeVerticalScrollRange(),
-            mRecyclerView!!.computeVerticalScrollOffset(), mRecyclerViewHeight
+            mVerticalDownY, y,
+            mRecyclerView.computeVerticalScrollRange(),
+            mRecyclerView.computeVerticalScrollOffset(),
+            mVerticalDownOffset,
+            getVerticalTrackArea(),
+            mVerticalThumbHeight,
         )
         if (scrollingBy != 0) {
-            mRecyclerView!!.scrollBy(0, scrollingBy)
+            mRecyclerView.scrollBy(0, scrollingBy)
         }
-        mVerticalDragY = dragY
     }
 
     private fun horizontalScrollTo(x: Float) {
-        val scrollbarRange = getHorizontalRange()
-        val dragX = max(scrollbarRange[0].toFloat(), min(scrollbarRange[1].toFloat(), x))
-        if (abs(mHorizontalThumbCenterX - dragX) < 2) {
+        if (abs((mHorizontalThumbCenterX - x)) < 2) {
             return
         }
         val scrollingBy = scrollTo(
-            mHorizontalDragX, dragX, scrollbarRange,
-            mRecyclerView!!.computeHorizontalScrollRange(),
-            mRecyclerView!!.computeHorizontalScrollOffset(), mRecyclerViewWidth
+            mHorizontalDownX, x,
+            mRecyclerView.computeHorizontalScrollRange(),
+            mRecyclerView.computeHorizontalScrollOffset(),
+            mHorizontalDownOffset,
+            getHorizontalTrackArea(),
+            mHorizontalThumbWidth,
         )
         if (scrollingBy != 0) {
-            mRecyclerView!!.scrollBy(scrollingBy, 0)
+            mRecyclerView.scrollBy(scrollingBy, 0)
         }
-        mHorizontalDragX = dragX
     }
 
     private fun scrollTo(
-        oldDragPos: Float,
+        downDragPos: Float,
         newDragPos: Float,
-        scrollbarRange: IntArray,
         scrollRange: Int,
         scrollOffset: Int,
-        viewLength: Int,
+        downScrollOffset: Int,
+        areaLength: Int,
+        thumbLength: Int,
     ): Int {
-        val scrollbarLength = scrollbarRange[1] - scrollbarRange[0]
-        if (scrollbarLength == 0) {
+        if (areaLength == 0) {
             return 0
         }
-        val percentage = ((newDragPos - oldDragPos) / scrollbarLength.toFloat())
-        val totalPossibleOffset = scrollRange - viewLength
-        val scrollingBy = (percentage * totalPossibleOffset).toInt()
-        val absoluteOffset = scrollOffset + scrollingBy
-        return if (absoluteOffset in 0..<totalPossibleOffset) scrollingBy else 0
+        val percentage = (newDragPos - downDragPos) / (areaLength - thumbLength)
+        val totalPossibleOffset = scrollRange - areaLength
+        val absoluteOffset = downScrollOffset + (percentage * totalPossibleOffset).toInt()
+        var scrollingBy = absoluteOffset - scrollOffset
+        when {
+            absoluteOffset < 0 -> scrollingBy += absoluteOffset
+            absoluteOffset > totalPossibleOffset -> scrollingBy += absoluteOffset - totalPossibleOffset
+        }
+        return scrollingBy
     }
 
     @VisibleForTesting
     fun isPointInsideVerticalThumb(x: Float, y: Float): Boolean {
         return when {
-            isLayoutRTL() -> x <= mVerticalThumbWidth
-            else -> x >= mRecyclerViewWidth - mVerticalThumbWidth
+            onTheLeft -> x <= verticalThumbArea
+            else -> x >= mRecyclerViewWidth - verticalThumbArea
         } && y >= mVerticalThumbCenterY - mVerticalThumbHeight / 2 && y <= mVerticalThumbCenterY + mVerticalThumbHeight / 2
     }
 
     @VisibleForTesting
     fun isPointInsideHorizontalThumb(x: Float, y: Float): Boolean {
-        return (y >= mRecyclerViewHeight - mHorizontalThumbHeight)
+        return (y >= mRecyclerViewHeight - horizontalThumbArea)
                 && x >= mHorizontalThumbCenterX - mHorizontalThumbWidth / 2 && x <= mHorizontalThumbCenterX + mHorizontalThumbWidth / 2
     }
 
+    /**
+     * Gets the vertical area of the vertical scroll bar.
+     */
     @VisibleForTesting
-    fun getHorizontalThumbDrawable(): Drawable = mHorizontalThumbDrawable
-
-    @VisibleForTesting
-    fun getVerticalThumbDrawable(): Drawable = mVerticalThumbDrawable
+    private fun getVerticalTrackArea() = mRecyclerViewHeight - paddingTop - paddingBottom
 
     /**
-     * Gets the (min, max) vertical positions of the vertical scroll bar.
+     * Gets the horizontal area of the horizontal scroll bar.
      */
-    private fun getVerticalRange(): IntArray {
-        mVerticalRange[0] = mMargin
-        mVerticalRange[1] = mRecyclerViewHeight - mMargin
-        return mVerticalRange
-    }
-
-    /**
-     * Gets the (min, max) horizontal positions of the horizontal scroll bar.
-     */
-    private fun getHorizontalRange(): IntArray {
-        mHorizontalRange[0] = mMargin
-        mHorizontalRange[1] = mRecyclerViewWidth - mMargin
-        return mHorizontalRange
-    }
+    private fun getHorizontalTrackArea() = mRecyclerViewWidth - paddingLeft - paddingRight
 
     private inner class AnimatorListener : AnimatorListenerAdapter() {
         private var mCanceled = false
@@ -504,7 +524,7 @@ class FastScroller(
                 mCanceled = false
                 return
             }
-            if (mShowHideAnimator.animatedValue as Float == 0f) {
+            if (mShowHideAnimator.animatedValue == 0f) {
                 mAnimationState = ANIMATION_STATE_OUT
                 setState(STATE_HIDDEN)
             } else {
