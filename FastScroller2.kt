@@ -136,7 +136,9 @@ class FastScroller2(
     private val mHideRunnable = Runnable { hide(HIDE_DURATION_MS) }
     private val mOnScrollListener = object : RecyclerView.OnScrollListener() {
         override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-            updateScrollPosition(recyclerView.computeHorizontalScrollOffset(), recyclerView.computeVerticalScrollOffset())
+            if (dx != 0 || dy != 0) {
+                updateScrollPosition(recyclerView.computeHorizontalScrollOffset(), recyclerView.computeVerticalScrollOffset())
+            }
         }
     }
 
