@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <dimen name="fastscroll_area">16dp</dimen>
+    <dimen name="fastscroll_thickness">6dp</dimen>
+    <dimen name="fastscroll_minimum_range" tools:ignore="PrivateResource">50dp</dimen>
+    <dimen name="fastscroll_minimum_size">56dp</dimen>
+</resources>
