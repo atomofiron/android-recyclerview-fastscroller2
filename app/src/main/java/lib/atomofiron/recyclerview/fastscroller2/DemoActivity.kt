@@ -32,7 +32,7 @@ class DemoActivity : AppCompatActivity() {
             resources.getDimensionPixelSize(R.dimen.fastscroll_thickness),
             resources.getDimensionPixelSize(R.dimen.fastscroll_minimum_range),
             resources.getDimensionPixelSize(R.dimen.fastscroll_area),
-            resources.getDimensionPixelSize(R.dimen.fastscroll_minimum_size),
+            resources.getDimensionPixelSize(R.dimen.fastscroll_minimum_length),
             inTheEnd = false,
         )
 
