@@ -29,10 +29,10 @@ class DemoActivity : AppCompatActivity() {
             ContextCompat.getDrawable(this, R.drawable.scroll_track) as Drawable,
             ContextCompat.getDrawable(this, R.drawable.scroll_thumb) as StateListDrawable,
             ContextCompat.getDrawable(this, R.drawable.scroll_track) as Drawable,
-            resources.getDimensionPixelSize(R.dimen.fastscroll_thickness),
-            resources.getDimensionPixelSize(R.dimen.fastscroll_minimum_range),
-            resources.getDimensionPixelSize(R.dimen.fastscroll_area),
-            resources.getDimensionPixelSize(R.dimen.fastscroll_minimum_length),
+            thickness = resources.getDimensionPixelSize(R.dimen.fastscroll_thickness),
+            mScrollbarMinimumRange = resources.getDimensionPixelSize(R.dimen.fastscroll_minimum_range),
+            minDragAreaSize = resources.getDimensionPixelSize(R.dimen.fastscroll_area),
+            minThumbLength = resources.getDimensionPixelSize(R.dimen.fastscroll_minimum_length),
             inTheEnd = false,
         )
 
